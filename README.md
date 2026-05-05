@@ -52,16 +52,21 @@ aiko    # ~/.local/bin/aiko を PATH に通してから
 人格コマンドはどちらの版でも同じです：
 
 ```
-/aiko-or                     アイコ（カスタマイズ）に切替
-/aiko-or <自然文>            アイコ（カスタマイズ）をカスタマイズ → 以降デフォルトで起動
-/aiko-origin                 アイコ（オリジナル）に切替（/aiko-org でも可）
-/aiko-mode                   現在モードの確認
-/aiko-reset                  アイコ（カスタマイズ）をリセット（確認あり・履歴は残る）
-/aiko-export                 現在のアイコ（カスタマイズ）を再現可能な形式で出力
-/aiko-diff                   オリジナルと自分用の差分を表示
+/aiko                            現在のモードでアイコを起動（モードは変えない）
+/aiko-mode                       現在のモードを表示
+/aiko-mode [origin|override]     モードを切替
+/aiko-or                         アイコ（カスタマイズ）に切替（/aiko-override でも可）
+/aiko-or <自然文>                アイコ（カスタマイズ）をカスタマイズ → 以降デフォルトで起動
+/aiko-origin                     アイコ（オリジナル）に切替（/aiko-org でも可）
+/aiko-reset                      アイコ（カスタマイズ）をリセット（確認あり・履歴は残る）
+/aiko-export                     現在のアイコ（カスタマイズ）を再現可能な形式で出力
+/aiko-diff                       オリジナルと自分用の差分を表示
 ```
 
-人格を直接編集しないでください。`aiko-origin.md` と `INVARIANTS.md` は OS パーミッションと hook で書込が拒否されます。
+人格を直接編集しないでください。両版とも `aiko-origin.md` と `INVARIANTS.md` は **OS パーミッション（chmod 444）** で書込から保護されています。これに加えて：
+
+- **Claude Code 版**：`pre-tool-use` hook が直接編集をブロック
+- **Codex 版**：`/aiko-override <指示>` 時に INVARIANTS チェック専用 ephemeral スレッドで違反判定
 
 ---
 
