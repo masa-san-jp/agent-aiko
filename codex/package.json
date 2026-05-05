@@ -17,7 +17,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/aiko-shell.js",
     "build:watch": "tsc --watch",
     "dev": "tsx src/aiko-shell.ts",
     "typecheck": "tsc --noEmit",
