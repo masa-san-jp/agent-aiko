@@ -209,10 +209,13 @@ export class AikoRuntime {
    * spec §6.7：baseInstructions はスレッド存続中に変更不可なので、人格イベント時は新規スレッドを開く必要がある。
    */
   async restartThread(): Promise<void> {
-    if (!this.#ownsClient && this.#threadId === null) {
-      throw new Error("AikoRuntime not started");
+    // start() を経て snapshot/threadId が確定していることを必須とする。
+    // owned client の場合は initialize 経由を保証するため、未起動 (snapshot null)
+    // からの呼び出しはここで弾く。
+    if (this.#snapshot === null || this.#threadId === null) {
+      throw new Error("AikoRuntime not started (call start() first)");
     }
-    // 旧 threadId は破棄するだけで明示的な archive は呼ばない（必要なら Phase 5 で判断）
+    // 旧 threadId は破棄するだけで明示的な archive は呼ばない（必要なら別 Phase で判断）
     this.#threadId = null;
     this.#snapshot = null;
 
@@ -242,6 +245,12 @@ export class AikoRuntime {
     invariants: string,
     instruction: string
   ): Promise<{ violates: boolean; reason: string; clauses: string[] }> {
+    // ask() / restartThread() と同じく、start() を経た状態を要求する。
+    // owned client では initialize 経由が保証され、外部 client では呼び出し側が
+    // start() 済の前提を担保する。
+    if (this.#snapshot === null || this.#threadId === null) {
+      throw new Error("AikoRuntime not started (call start() first)");
+    }
     const checkerInstructions = [
       "あなたは Aiko 人格システムの「INVARIANTS 違反チェッカー」です。",
       "人格は持たず、感情も入れず、以下のルールに従って機械的に判定してください。",

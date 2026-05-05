@@ -332,7 +332,55 @@ describe("AikoCommandRouter — /aiko-override <instruction>", () => {
   });
 });
 
+describe("AikoCommandRouter — /aiko-override edge cases", () => {
+  it("treats whitespace-only args as no-arg form (mode switch only)", async () => {
+    const fixture = await makeFixture();
+    try {
+      const transport = new MockTransport();
+      const { runtime, client } = await bootRuntime(transport, fixture.aikoHome);
+      const router = new AikoCommandRouter({ aikoHome: fixture.aikoHome, runtime });
+      const result = await router.execute("aiko-or", "   \t  ");
+      // INVARIANTS チェックには進まない（whitespace-only なら mode 切替扱い）
+      assert.match(result.output, /カスタマイズ/);
+      assert.equal(result.needsRestart, true);
+      // override.md は変わっていない
+      const ov = await readFile(
+        join(fixture.aikoHome, "persona", "aiko-override.md"),
+        "utf8"
+      );
+      assert.match(ov, /original body/);
+      await client.stop();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
 describe("AikoCommandRouter — /aiko-reset", () => {
+  it("defaults to safe-cancel when no confirm function is provided", async () => {
+    const fixture = await makeFixture();
+    try {
+      await writeFile(
+        join(fixture.aikoHome, "persona", "aiko-override.md"),
+        "# Override\ncustom\n"
+      );
+      const transport = new MockTransport();
+      const { runtime, client } = await bootRuntime(transport, fixture.aikoHome);
+      // confirm 未指定 → 既定で常に false（キャンセル）
+      const router = new AikoCommandRouter({ aikoHome: fixture.aikoHome, runtime });
+      const result = await router.execute("aiko-reset", "");
+      assert.match(result.output, /キャンセル/);
+      const ov = await readFile(
+        join(fixture.aikoHome, "persona", "aiko-override.md"),
+        "utf8"
+      );
+      assert.match(ov, /custom/);
+      await client.stop();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("requires confirmation; declined leaves files untouched", async () => {
     const fixture = await makeFixture();
     try {

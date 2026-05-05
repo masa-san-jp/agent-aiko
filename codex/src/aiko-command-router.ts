@@ -8,7 +8,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { appendOverrideHistory } from "./aiko-history.js";
-import { loadPersona } from "./aiko-persona-loader.js";
 import type { AikoRuntime } from "./aiko-runtime.js";
 
 /** スラッシュコマンドのパース結果。 */
@@ -42,7 +41,11 @@ export interface CommandResult {
 export interface AikoCommandRouterOptions {
   aikoHome?: string;
   runtime: AikoRuntime;
-  /** /aiko-reset の確認 prompt（"y/n" 入力を受け付ける関数）。 */
+  /**
+   * /aiko-reset の確認 prompt（"y/n" 入力を受け付ける関数）。
+   * 未指定時の既定は **常に false（キャンセル）** を返す。
+   * /aiko-reset は破壊的操作なので、明示的に確認関数を渡さなければ実行できない設計にする。
+   */
   confirm?: (message: string) => Promise<boolean>;
 }
 
@@ -66,7 +69,8 @@ export class AikoCommandRouter {
   constructor(opts: AikoCommandRouterOptions) {
     this.#aikoHome = opts.aikoHome ?? join(homedir(), ".aiko");
     this.#runtime = opts.runtime;
-    this.#confirm = opts.confirm ?? (async () => true);
+    // 既定は安全側（キャンセル）。/aiko-reset を有効化したい場合は明示的に confirm を渡す
+    this.#confirm = opts.confirm ?? (async () => false);
   }
 
   /** 既知コマンドかどうかだけを返す（shell が unknown を user input にしない判断に使用）。 */
@@ -140,8 +144,9 @@ export class AikoCommandRouter {
   }
 
   async #cmdOverride(args: string): Promise<CommandResult> {
-    // 引数なし → mode を override に切替
-    if (args.length === 0) {
+    // 引数なし（空白のみ含む）→ mode を override に切替
+    const trimmedArgs = args.trim();
+    if (trimmedArgs.length === 0) {
       const current = await this.#readCurrentMode();
       if (current === "override") {
         return { output: "既に アイコ（カスタマイズ）モードです。" };
@@ -161,7 +166,7 @@ export class AikoCommandRouter {
     const invariantsPath = join(this.#aikoHome, "persona", "INVARIANTS.md");
     const invariants = await readFile(invariantsPath, "utf8");
 
-    const verdict = await this.#runtime.runInvariantsCheck(invariants, args);
+    const verdict = await this.#runtime.runInvariantsCheck(invariants, trimmedArgs);
     if (verdict.violates) {
       const clauses = verdict.clauses.length > 0 ? `\n該当条項: ${verdict.clauses.join(", ")}` : "";
       return {
@@ -175,7 +180,7 @@ export class AikoCommandRouter {
     // 「ユーザー指示」セクションを末尾に追記する保守的な実装にする）
     const overridePath = join(this.#aikoHome, "persona", "aiko-override.md");
     const existing = await readFile(overridePath, "utf8");
-    const merged = mergeOverrideInstruction(existing, args);
+    const merged = mergeOverrideInstruction(existing, trimmedArgs);
     await writeFile(overridePath, merged, "utf8");
 
     await this.#writeMode("override");
@@ -183,15 +188,15 @@ export class AikoCommandRouter {
       {
         ts: new Date().toISOString(),
         action: "override",
-        instruction: args,
-        summary: summarizeInstruction(args),
+        instruction: trimmedArgs,
+        summary: summarizeInstruction(trimmedArgs),
       },
       this.#aikoHome
     );
     return {
       output:
         `アイコ（カスタマイズ）を更新しました。次回から自動で起動します。\n` +
-        `指示: ${summarizeInstruction(args)}`,
+        `指示: ${summarizeInstruction(trimmedArgs)}`,
       needsRestart: true,
     };
   }
@@ -232,8 +237,9 @@ export class AikoCommandRouter {
         diff || "（差分なし）",
         "",
         "===== 再現手順 =====",
-        "1. アイコ（オリジナル）の Aiko-Aiko を持つ環境に上の override.md 全文を貼り付ける",
-        "2. `/aiko-override` で override モードに切替（または上記 diff の指示部分を `/aiko-or <指示>` で適用）",
+        "1. Agent-Aiko をインストール済の環境で、上記 aiko-override.md 全文を ~/.aiko/persona/aiko-override.md に貼り付ける",
+        "2. `/aiko-override`（引数なし）で override モードに切り替える",
+        "   — もしくは差分中の「ユーザー指示」セクションだけを `/aiko-or <指示>` で個別適用する",
       ].join("\n"),
     };
   }
@@ -260,13 +266,23 @@ export class AikoCommandRouter {
   }
 
   /** ディスクから現在の mode を読む（ランタイムのキャッシュは restartThread を呼ばないと
-   *  古いままなので、コマンド分岐は毎回ディスクを真として扱う）。 */
+   *  古いままなので、コマンド分岐は毎回ディスクを真として扱う）。
+   *  不在（ENOENT）のみ "origin" にフォールバックし、それ以外（EACCES/EPERM 等）は
+   *  rethrow して呼び出し側に観測させる。 */
   async #readCurrentMode(): Promise<"origin" | "override"> {
     try {
       const raw = (await readFile(join(this.#aikoHome, "mode"), "utf8")).trim();
       return raw === "override" ? "override" : "origin";
-    } catch {
-      return "origin";
+    } catch (err) {
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        (err as { code?: unknown }).code === "ENOENT"
+      ) {
+        return "origin";
+      }
+      throw err;
     }
   }
 }
