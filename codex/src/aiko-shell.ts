@@ -33,6 +33,8 @@ async function main(): Promise<number> {
         "hint: codex CLI が動いているか、`codex login` 済みかを確認してください。\n"
       );
     }
+    // 子プロセス（codex app-server）が部分起動した可能性があるため best-effort で停止
+    await runtime.stop().catch(() => undefined);
     return 1;
   }
 
@@ -58,8 +60,9 @@ async function main(): Promise<number> {
       activeAbort.abort();
       process.stdout.write("\n[interrupting...]\n");
     } else {
-      // 入力待ちで Ctrl+C 1 回 → 通常終了
-      process.stdout.write("\n[Ctrl+C — type /exit or press Ctrl+C again to exit]\n");
+      // 入力待ちで Ctrl+C 1 回 → 警告表示してプロンプト再開
+      // （即時終了は 2 秒以内の 2 連打、もしくは /exit）
+      process.stdout.write("\n[Ctrl+C — type /exit or press Ctrl+C again within 2s to exit]\n");
       rl.prompt();
     }
   });

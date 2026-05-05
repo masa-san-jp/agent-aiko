@@ -59,23 +59,45 @@ export class AikoRuntime {
     }
   }
 
-  /** 起動シーケンスを実行する。 */
+  /**
+   * 起動シーケンスを実行する。
+   * thread/start や CodexClient.start の途中で失敗した場合、所有 client は
+   * stop して #snapshot/#threadId を初期化する（リソースリーク防止）。
+   */
   async start(): Promise<this> {
     const aikoHomeOpt: { aikoHome?: string } = {};
     if (this.#options.aikoHome !== undefined) aikoHomeOpt.aikoHome = this.#options.aikoHome;
     this.#snapshot = await loadPersona(aikoHomeOpt);
     const baseInstructions = buildBaseInstructions(this.#snapshot);
 
-    if (this.#ownsClient) {
-      await this.#client.start();
+    let clientStarted = false;
+    try {
+      if (this.#ownsClient) {
+        await this.#client.start();
+        clientStarted = true;
+      }
+      const { threadId } = await this.#client.startThread({
+        baseInstructions,
+        ephemeral: false,
+      });
+      this.#threadId = threadId;
+      this.#options.onLog?.(
+        `[aiko-runtime] thread started: ${threadId} (mode=${this.#snapshot.mode})`
+      );
+      return this;
+    } catch (err) {
+      // ロールバック：snapshot / threadId をリセットし、所有 client は停止
+      this.#snapshot = null;
+      this.#threadId = null;
+      if (clientStarted && this.#ownsClient) {
+        try {
+          await this.#client.stop();
+        } catch {
+          // best-effort: stop 失敗は元エラーを優先するため無視
+        }
+      }
+      throw err;
     }
-    const { threadId } = await this.#client.startThread({
-      baseInstructions,
-      ephemeral: false,
-    });
-    this.#threadId = threadId;
-    this.#options.onLog?.(`[aiko-runtime] thread started: ${threadId} (mode=${this.#snapshot.mode})`);
-    return this;
   }
 
   /** 起動済みかを返す。 */
@@ -112,22 +134,39 @@ export class AikoRuntime {
     const prefixWithSpace = `${expectedPrefix} `;
     let prefixDecided = false;
     let prefixWasForced = false;
+    /** 判定確定までストリーム冒頭を貯めておくバッファ。確定したら一括 flush。 */
+    let headBuffer = "";
 
     const userOnDelta = opts.onDelta;
-    const wrappedDelta = ((chunk: string): void => {
-      if (!prefixDecided) {
-        prefixDecided = true;
-        // chunk の頭で prefix が来ているか確認（途中改行などは無視）
-        const head = chunk.trimStart();
-        if (!head.startsWith(expectedPrefix)) {
-          // prefix を先に出力してから本文を流す
+    const wrappedDelta = (chunk: string): void => {
+      if (prefixDecided) {
+        userOnDelta?.(chunk);
+        return;
+      }
+      headBuffer += chunk;
+      const trimmed = headBuffer.trimStart();
+      // 判断材料が prefix 長に達していない場合：
+      //   - 既に prefix の途中で異なる文字が出ていれば（startsWith が false）→ 即時 force
+      //   - そうでなければ判定保留（次の chunk を待つ）
+      if (trimmed.length < expectedPrefix.length) {
+        if (trimmed.length > 0 && !expectedPrefix.startsWith(trimmed)) {
+          prefixDecided = true;
           prefixWasForced = true;
           this.#prefixForcedCount += 1;
           userOnDelta?.(prefixWithSpace);
+          userOnDelta?.(headBuffer);
         }
+        return;
       }
-      userOnDelta?.(chunk);
-    });
+      // 判断材料が十分ある：startsWith で確定させて flush
+      prefixDecided = true;
+      if (!trimmed.startsWith(expectedPrefix)) {
+        prefixWasForced = true;
+        this.#prefixForcedCount += 1;
+        userOnDelta?.(prefixWithSpace);
+      }
+      userOnDelta?.(headBuffer);
+    };
 
     const askArgs: Parameters<CodexClient["ask"]>[0] = {
       threadId: this.#threadId,
@@ -138,6 +177,19 @@ export class AikoRuntime {
     if (opts.abortSignal !== undefined) askArgs.abortSignal = opts.abortSignal;
 
     const result = await this.#client.ask(askArgs);
+
+    // ストリーム終端処理：判定保留のまま残った headBuffer があれば flush。
+    // ストリーム全長が prefix 長未満で終わったケース（短い応答／空白のみ等）。
+    if (!prefixDecided && headBuffer.length > 0) {
+      prefixDecided = true;
+      const trimmed = headBuffer.trimStart();
+      if (!trimmed.startsWith(expectedPrefix)) {
+        prefixWasForced = true;
+        this.#prefixForcedCount += 1;
+        userOnDelta?.(prefixWithSpace);
+      }
+      userOnDelta?.(headBuffer);
+    }
 
     // 最終 text にも補完を反映
     if (!result.text.trimStart().startsWith(expectedPrefix)) {

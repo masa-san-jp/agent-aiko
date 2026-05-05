@@ -42,9 +42,9 @@ function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   });
 }
 
-/** initialize ハンドシェイクと thread/start を完了させた CodexClient + transport を返す。
- *  thread/start のレスポンスは threadId を引数で指定可能。 */
-async function bootClient(transport: MockTransport, threadId: string): Promise<CodexClient> {
+/** initialize → initialized ハンドシェイクのみ完了させた CodexClient を返す。
+ *  thread/start のレスポンスは各テスト側で個別に push する。 */
+async function bootClient(transport: MockTransport): Promise<CodexClient> {
   const client = new CodexClient({ transport });
   const startP = client.start();
   await waitFor(() => transport.writes.length >= 1);
@@ -65,7 +65,7 @@ describe("AikoRuntime.start", () => {
 
   it("loads persona, opens a thread with baseInstructions, and exposes mode", async () => {
     const t = new MockTransport();
-    const client = await bootClient(t, "th-1");
+    const client = await bootClient(t);
 
     const runtime = new AikoRuntime({ aikoHome: fixture.aikoHome, codexClient: client });
     const startP = runtime.start();
@@ -91,7 +91,7 @@ describe("AikoRuntime.start", () => {
     await fixture.cleanup();
     fixture = await makeAikoFixture("override");
     const t = new MockTransport();
-    const client = await bootClient(t, "th-2");
+    const client = await bootClient(t);
     const runtime = new AikoRuntime({ aikoHome: fixture.aikoHome, codexClient: client });
     const startP = runtime.start();
     await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "thread/start"));
@@ -110,6 +110,27 @@ describe("AikoRuntime.start", () => {
     assert.throws(() => runtime.threadId, /not started/);
     assert.equal(runtime.isReady, false);
   });
+
+  it("rolls back snapshot/threadId when thread/start fails after CodexClient.start succeeds", async () => {
+    const t = new MockTransport();
+    const client = await bootClient(t);
+    const runtime = new AikoRuntime({ aikoHome: fixture.aikoHome, codexClient: client });
+    const startP = runtime.start();
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "thread/start"));
+    const threadStart = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "thread/start");
+    assert.ok(threadStart);
+    // thread/start にエラー応答を返す
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: threadStart.id,
+      error: { code: -32603, message: "thread quota exceeded" },
+    });
+    await assert.rejects(startP, /thread quota exceeded/);
+    // ロールバック確認：未 ready
+    assert.equal(runtime.isReady, false);
+    assert.throws(() => runtime.threadId, /not started/);
+    await client.stop();
+  });
 });
 
 describe("AikoRuntime.ask (prefix enforcement)", () => {
@@ -121,7 +142,7 @@ describe("AikoRuntime.ask (prefix enforcement)", () => {
   beforeEach(async () => {
     fixture = await makeAikoFixture();
     transport = new MockTransport();
-    client = await bootClient(transport, "th");
+    client = await bootClient(transport);
     runtime = new AikoRuntime({ aikoHome: fixture.aikoHome, codexClient: client });
     const startP = runtime.start();
     await waitFor(() => transport.writes.some((w) => JSON.parse(w).method === "thread/start"));
@@ -193,6 +214,32 @@ describe("AikoRuntime.ask (prefix enforcement)", () => {
     assert.equal(text, "Aiko-origin: hi");
     assert.equal(runtime.prefixForcedCount, 1);
   });
+
+  it("does not double-prefix when an empty/whitespace first chunk precedes the real prefix", async () => {
+    // 旧バグ：最初の chunk が空白だけだと「prefix が無い」と誤判定して二重 prefix になっていた。
+    // 期待挙動：勝手に補完せず、応答の prefix を 1 度だけ通す（先頭空白は元応答のまま温存）。
+    const { text, collected } = await runOneTurn(["", "  ", "Aiko-origin: ", "ok"]);
+    assert.equal(collected.match(/Aiko-origin:/g)?.length, 1);
+    assert.equal(text.match(/Aiko-origin:/g)?.length, 1);
+    assert.equal(runtime.prefixForcedCount, 0);
+  });
+
+  it("buffers tiny chunks until prefix decision is possible", async () => {
+    // prefix 1 文字ずつ流す：判定保留しながらバッファし、確定で flush
+    const chunks = ["A", "i", "k", "o", "-", "o", "r", "i", "g", "i", "n", ":", " hi"];
+    const { text, collected } = await runOneTurn(chunks);
+    assert.equal(text, "Aiko-origin: hi");
+    assert.equal(collected, "Aiko-origin: hi");
+    assert.equal(runtime.prefixForcedCount, 0);
+  });
+
+  it("flushes buffered head and forces prefix when stream ends shorter than prefix", async () => {
+    // 応答全体が prefix 長より短い → 終端処理で flush ＋ 強制補完
+    const { text, collected } = await runOneTurn(["hi"]);
+    assert.equal(text, "Aiko-origin: hi");
+    // collected も補完済 prefix を含む
+    assert.match(collected, /^Aiko-origin: hi$/);
+  });
 });
 
 describe("AikoRuntime.stop", () => {
@@ -200,7 +247,7 @@ describe("AikoRuntime.stop", () => {
     const fixture = await makeAikoFixture();
     try {
       const t = new MockTransport();
-      const client = await bootClient(t, "th-stop");
+      const client = await bootClient(t);
       const runtime = new AikoRuntime({ aikoHome: fixture.aikoHome, codexClient: client });
       const startP = runtime.start();
       await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "thread/start"));
