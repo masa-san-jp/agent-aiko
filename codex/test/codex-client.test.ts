@@ -113,6 +113,71 @@ describe("CodexClient.stop", () => {
   });
 });
 
+describe("CodexClient.getAccount", () => {
+  it("returns chatgpt info when logged in via ChatGPT", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const accountP = client.getAccount();
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "account/read"));
+    const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "account/read");
+    assert.ok(req);
+    assert.deepEqual(req.params, { refreshToken: false });
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        account: { type: "chatgpt", email: "test@example.com", planType: "plus" },
+        requiresOpenaiAuth: false,
+      },
+    });
+    const info = await accountP;
+    assert.equal(info.authMode, "chatgpt");
+    assert.equal(info.email, "test@example.com");
+    assert.equal(info.planType, "plus");
+    assert.equal(info.requiresOpenaiAuth, false);
+    await client.stop();
+  });
+
+  it("returns null authMode when account is null (unauthenticated)", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const accountP = client.getAccount();
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "account/read"));
+    const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "account/read");
+    assert.ok(req);
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { account: null, requiresOpenaiAuth: true },
+    });
+    const info = await accountP;
+    assert.equal(info.authMode, null);
+    assert.equal(info.email, undefined);
+    assert.equal(info.planType, undefined);
+    assert.equal(info.requiresOpenaiAuth, true);
+    await client.stop();
+  });
+
+  it("handles apiKey account without email/planType", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const accountP = client.getAccount();
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "account/read"));
+    const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "account/read");
+    assert.ok(req);
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { account: { type: "apiKey" }, requiresOpenaiAuth: false },
+    });
+    const info = await accountP;
+    assert.equal(info.authMode, "apiKey");
+    assert.equal(info.email, undefined);
+    assert.equal(info.planType, undefined);
+    await client.stop();
+  });
+});
+
 describe("CodexClient.startThread", () => {
   it("threads all optional parameters into thread/start params", async () => {
     const t = new MockTransport();

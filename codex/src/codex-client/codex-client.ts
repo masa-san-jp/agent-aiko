@@ -151,14 +151,34 @@ export class CodexClient {
     this.#buffer.reset();
   }
 
-  /** account/read で認証状態を取得する。 */
+  /**
+   * account/read で認証状態を取得する。
+   *
+   * 実機スキーマ（codex-cli 0.128.0、v2/GetAccountResponse）：
+   *   { account: Account | null, requiresOpenaiAuth: boolean }
+   *   Account = { type: "apiKey" } | { type: "chatgpt", email, planType } | { type: "amazonBedrock" }
+   *
+   * 本メソッドは AccountInfo に展開して返す。account が null（未ログイン）なら
+   * authMode は null。
+   */
   async getAccount(): Promise<AccountInfo> {
-    const result = (await this.#request("account/read", {})) as Record<string, JsonValue>;
-    const authMode = (result["authMode"] ?? null) as string | null;
-    const planType = result["planType"] as string | null | undefined;
+    const raw = (await this.#request("account/read", { refreshToken: false })) as {
+      account?: { type?: string; email?: string; planType?: string } | null;
+      requiresOpenaiAuth?: boolean;
+    };
+    const account = raw.account ?? null;
+    const type = account?.type;
+    const authMode: AccountInfo["authMode"] =
+      type === "apiKey" || type === "chatgpt" || type === "amazonBedrock" ? type : null;
     const info: AccountInfo = { authMode };
-    if (planType !== undefined) {
-      info.planType = planType;
+    if (account && typeof account.email === "string") {
+      info.email = account.email;
+    }
+    if (account && typeof account.planType === "string") {
+      info.planType = account.planType;
+    }
+    if (typeof raw.requiresOpenaiAuth === "boolean") {
+      info.requiresOpenaiAuth = raw.requiresOpenaiAuth;
     }
     return info;
   }

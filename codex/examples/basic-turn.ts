@@ -19,7 +19,12 @@ async function main(): Promise<void> {
 
   console.log("[2/5] reading account ...");
   const account = await client.getAccount();
-  console.log(`     authMode=${account.authMode ?? "<unauthenticated>"} planType=${account.planType ?? "?"}`);
+  const status = [
+    `authMode=${account.authMode ?? "<unauthenticated>"}`,
+    account.email !== undefined ? `email=${account.email}` : null,
+    account.planType !== undefined ? `planType=${account.planType}` : null,
+  ].filter((s): s is string => s !== null).join(" ");
+  console.log(`     ${status}`);
   if (account.authMode === null) {
     console.log("[smoke-test OK] startup → handshake → account/read are working.");
     console.log("To exercise the full ask() flow, run `codex login` first and rerun this example.");

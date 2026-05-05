@@ -58,8 +58,15 @@ export interface AskResult {
 
 /** account/read の戻り値（app-server から返る情報のうち本クライアントが関心を持つフィールド）。 */
 export interface AccountInfo {
-  /** 認証モード。null は未ログイン。 */
-  authMode: string | null;
-  /** プラン種別（"plus" / "pro" / "team" 等）。 */
-  planType?: string | null;
+  /**
+   * 認証モード。Account.type を素直に展開した値で、
+   * "apiKey" / "chatgpt" / "amazonBedrock" のいずれか、または null（未ログイン）。
+   */
+  authMode: "apiKey" | "chatgpt" | "amazonBedrock" | null;
+  /** ChatGPT ログイン時のメールアドレス。 */
+  email?: string;
+  /** ChatGPT ログイン時のプラン種別（"plus" / "pro" / "team" 等）。 */
+  planType?: string;
+  /** OpenAI 認証が必要か（codex 側のフラグをそのまま伝搬）。 */
+  requiresOpenaiAuth?: boolean;
 }
