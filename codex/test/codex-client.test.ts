@@ -53,6 +53,121 @@ describe("CodexClient.start", () => {
     assert.equal(initializedCount, 1, "initialized should be sent only once");
     await client.stop();
   });
+
+  it("allows retry after initialize fails by resetting #startPromise", async () => {
+    const t = new MockTransport();
+    const client = new CodexClient({ transport: t });
+
+    // 1 回目：initialize で JSON-RPC error を返して失敗させる
+    const startP1 = client.start();
+    await waitFor(() => t.writes.length >= 1);
+    const init1 = t.lastWrite();
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: init1.id,
+      error: { code: -32600, message: "boom" },
+    });
+    await assert.rejects(startP1, /JSON-RPC error -32600/);
+
+    // 2 回目：再 start() できること（#startPromise が null にリセット済）
+    const startP2 = client.start();
+    // 失敗 initialize と再 initialize の 2 件が write されるのを待つ
+    await waitFor(() => {
+      const inits = t.writes.map((w) => JSON.parse(w)).filter((m) => m.method === "initialize");
+      return inits.length >= 2;
+    });
+    const initWrites = t.writes
+      .map((w) => JSON.parse(w))
+      .filter((m) => m.method === "initialize");
+    assert.equal(initWrites.length, 2, "second start() should re-send initialize");
+    const init2 = initWrites[1];
+    assert.ok(init2);
+    t.pushIncoming({ jsonrpc: "2.0", id: init2.id, result: {} });
+    await startP2;
+    // 成功後は initialized も送られていること
+    const initializedWrites = t.writes
+      .map((w) => JSON.parse(w))
+      .filter((m) => m.method === "initialized");
+    assert.equal(initializedWrites.length, 1, "initialized should be sent once after retry succeeds");
+    await client.stop();
+  });
+});
+
+describe("CodexClient.stop", () => {
+  it("rejects in-flight ask() with 'CodexClient stopped'", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const askP = client.ask({ threadId: "th-stop", text: "running long..." });
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "turn/start"));
+    const turnStart = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "turn/start");
+    assert.ok(turnStart);
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: turnStart.id,
+      result: { turn: { id: "turn-stop", items: [], status: "inProgress", error: null } },
+    });
+    // stop() が完了する前に ask() の reject が観測されることを確認
+    const stopP = client.stop();
+    await assert.rejects(askP, /CodexClient stopped/);
+    await stopP;
+  });
+});
+
+describe("CodexClient.startThread", () => {
+  it("threads all optional parameters into thread/start params", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const threadP = client.startThread({
+      baseInstructions: "BI",
+      developerInstructions: "DI",
+      model: "gpt-5",
+      serviceTier: "priority",
+      ephemeral: true,
+    });
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "thread/start"));
+    const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "thread/start");
+    assert.ok(req);
+    assert.deepEqual(req.params, {
+      baseInstructions: "BI",
+      developerInstructions: "DI",
+      model: "gpt-5",
+      serviceTier: "priority",
+      ephemeral: true,
+    });
+    t.pushIncoming({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { threadId: "th-new" },
+    });
+    const result = await threadP;
+    assert.equal(result.threadId, "th-new");
+    await client.stop();
+  });
+
+  it("omits optional parameters when not provided", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const threadP = client.startThread({ baseInstructions: "only base" });
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "thread/start"));
+    const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "thread/start");
+    assert.ok(req);
+    assert.deepEqual(req.params, { baseInstructions: "only base" });
+    t.pushIncoming({ jsonrpc: "2.0", id: req.id, result: { threadId: "th-min" } });
+    await threadP;
+    await client.stop();
+  });
+
+  it("rejects when response lacks threadId", async () => {
+    const t = new MockTransport();
+    const client = await startClient(t);
+    const threadP = client.startThread({ baseInstructions: "x" });
+    await waitFor(() => t.writes.some((w) => JSON.parse(w).method === "thread/start"));
+    const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "thread/start");
+    assert.ok(req);
+    t.pushIncoming({ jsonrpc: "2.0", id: req.id, result: { unexpected: "shape" } });
+    await assert.rejects(threadP, /thread\/start returned no threadId/);
+    await client.stop();
+  });
 });
 
 describe("CodexClient.ask", () => {
