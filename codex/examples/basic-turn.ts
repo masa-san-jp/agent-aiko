@@ -21,9 +21,10 @@ async function main(): Promise<void> {
   const account = await client.getAccount();
   console.log(`     authMode=${account.authMode ?? "<unauthenticated>"} planType=${account.planType ?? "?"}`);
   if (account.authMode === null) {
-    console.error("ERROR: not authenticated. Run `codex login` first.");
+    console.log("[smoke-test OK] startup → handshake → account/read are working.");
+    console.log("To exercise the full ask() flow, run `codex login` first and rerun this example.");
     await client.stop();
-    process.exit(1);
+    return;
   }
 
   console.log("[3/5] starting thread (ephemeral) ...");

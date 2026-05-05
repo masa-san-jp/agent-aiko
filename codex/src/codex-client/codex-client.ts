@@ -13,6 +13,7 @@ import {
   parseIncoming,
 } from "./jsonrpc.js";
 import { ProcessManager } from "./process-manager.js";
+import type { Transport } from "./transport.js";
 import type {
   AccountInfo,
   AskOptions,
@@ -25,10 +26,17 @@ interface PendingRequest {
   resolve: (value: JsonValue) => void;
   reject: (reason: Error) => void;
   timer: NodeJS.Timeout;
+  /**
+   * 応答受信時に Promise resolve より前に同期実行されるコールバック。
+   * stdout チャンクに response＋notification が混ざっている場合、
+   * 後続の notification ハンドラが見る activeTurn の状態をここで更新できる。
+   */
+  onResolve?: (value: JsonValue) => void;
 }
 
 interface ActiveTurn {
   threadId: string;
+  /** turn/start レスポンスで確定する turnId。確定前は __pending__ プレースホルダ。 */
   turnId: string;
   resolveAsk: (result: AskResult) => void;
   rejectAsk: (reason: Error) => void;
@@ -37,10 +45,21 @@ interface ActiveTurn {
   abortSignal: AbortSignal | undefined;
   onStarted: ((turnId: string) => void) | undefined;
   onDelta: ((chunk: string) => void) | undefined;
+  /** 既に解決済み（resolve または reject 済み）かのフラグ。 */
+  settled: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PROTOCOL_VERSION = "2024-11-05";
+const CLIENT_NAME = "@agent-aiko/codex";
+/** initialize で advertise するクライアントバージョン。本ファイルが単一情報源。 */
+export const CLIENT_VERSION = "0.2.0";
+
+/** CodexClient コンストラクタの内部オプション（テスト用 transport 注入を含む）。 */
+export interface CodexClientInternalOptions extends CodexClientOptions {
+  /** テスト等で Transport 実装を差し替えるためのフック。指定時は ProcessManager を作らない。 */
+  transport?: Transport;
+}
 
 /**
  * codex app-server との JSON-RPC 通信を抽象化する高レベルクライアント。
@@ -56,44 +75,68 @@ const PROTOCOL_VERSION = "2024-11-05";
  */
 export class CodexClient {
   readonly #options: CodexClientOptions;
-  readonly #process: ProcessManager;
+  readonly #transport: Transport;
   readonly #buffer = new LineBuffer();
   readonly #pending = new Map<number, PendingRequest>();
   /** 進行中ターン（threadId をキーに 1 件のみ管理）。 */
   readonly #activeTurns = new Map<string, ActiveTurn>();
   #nextId = 1;
   #ready = false;
+  #startPromise: Promise<this> | null = null;
 
-  constructor(options: CodexClientOptions = {}) {
-    this.#options = options;
-    this.#process = new ProcessManager({
-      ...(options.serverPath !== undefined ? { serverPath: options.serverPath } : {}),
-      ...(options.codexHome !== undefined ? { codexHome: options.codexHome } : {}),
-      ...(options.onLog !== undefined ? { onLog: options.onLog } : {}),
-      onExit: (code, signal) => this.#handleExit(code, signal),
-    });
+  constructor(options: CodexClientInternalOptions = {}) {
+    const { transport, ...publicOptions } = options;
+    this.#options = publicOptions;
+    if (transport !== undefined) {
+      this.#transport = transport;
+    } else {
+      const pmOptions: {
+        serverPath?: string;
+        codexHome?: string;
+        onLog?: (line: string) => void;
+      } = {};
+      if (publicOptions.serverPath !== undefined) pmOptions.serverPath = publicOptions.serverPath;
+      if (publicOptions.codexHome !== undefined) pmOptions.codexHome = publicOptions.codexHome;
+      if (publicOptions.onLog !== undefined) pmOptions.onLog = publicOptions.onLog;
+      this.#transport = new ProcessManager(pmOptions);
+    }
+    this.#transport.onExit((code, signal) => this.#handleExit(code, signal));
   }
 
-  /** App Server を起動し initialize → initialized ハンドシェイクを完了させる。 */
+  /**
+   * App Server を起動し initialize → initialized ハンドシェイクを完了させる。
+   * 並列に呼ばれた場合は同じ Promise を返す（ハンドシェイクの二重発行を防ぐ）。
+   */
   async start(): Promise<this> {
     if (this.#ready) {
       return this;
     }
-    this.#process.start();
-    this.#process.onStdout((chunk) => this.#handleChunk(chunk));
-
-    await this.#request("initialize", {
-      protocolVersion: PROTOCOL_VERSION,
-      clientInfo: { name: "@agent-aiko/codex", version: "0.1.0" },
-    });
-    this.#notify("initialized", {});
-    this.#ready = true;
-    return this;
+    if (this.#startPromise !== null) {
+      return this.#startPromise;
+    }
+    this.#startPromise = (async (): Promise<this> => {
+      try {
+        this.#transport.start();
+        this.#transport.onStdout((chunk) => this.#handleChunk(chunk));
+        await this.#request("initialize", {
+          protocolVersion: PROTOCOL_VERSION,
+          clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
+        });
+        this.#notify("initialized", {});
+        this.#ready = true;
+        return this;
+      } catch (err) {
+        this.#startPromise = null;
+        throw err;
+      }
+    })();
+    return this.#startPromise;
   }
 
   /** App Server を停止する。 */
   async stop(): Promise<void> {
     this.#ready = false;
+    this.#startPromise = null;
     // 進行中の pending と turn をすべて reject する
     for (const [, p] of this.#pending) {
       clearTimeout(p.timer);
@@ -101,13 +144,10 @@ export class CodexClient {
     }
     this.#pending.clear();
     for (const [, t] of this.#activeTurns) {
-      t.rejectAsk(new Error("CodexClient stopped"));
-      if (t.abortListener && t.abortSignal) {
-        t.abortSignal.removeEventListener("abort", t.abortListener);
-      }
+      this.#settleTurn(t, () => t.rejectAsk(new Error("CodexClient stopped")));
     }
     this.#activeTurns.clear();
-    await this.#process.stop();
+    await this.#transport.stop();
     this.#buffer.reset();
   }
 
@@ -155,12 +195,19 @@ export class CodexClient {
    *   1. turn/start リクエストを送信し、応答（TurnStartResponse: {turn: {id, ...}}）から turnId を取得
    *   2. activeTurns に turnId を記録、onStarted を呼び出す
    *   3. item/agentMessage/delta 通知を集約しつつ onDelta を呼び出す
-   *   4. turn/completed 通知で resolve、turn/error で reject
+   *   4. turn/completed 通知で resolve、turn.status === "failed" で reject
    *   5. AbortSignal が abort されたら turn/interrupt を発行
+   *
+   * 同一 threadId に対する並列 ask() は拒否する（spec §6.7：1 スレッド 1 ターンが原則）。
    *
    * 設計の正本: dev-docs/2026-05-05-Agent-Aiko-Codex-design.md v0.3.1 §6.1 / §6.7
    */
   async ask(opts: AskOptions): Promise<AskResult> {
+    if (this.#activeTurns.has(opts.threadId)) {
+      throw new Error(
+        `thread ${opts.threadId} already has an in-flight turn (one turn per thread is the contract)`
+      );
+    }
     if (opts.abortSignal?.aborted === true) {
       throw new Error("aborted before turn started");
     }
@@ -171,7 +218,7 @@ export class CodexClient {
     };
 
     // turn/start リクエスト送信前に activeTurns プレースホルダを置く。
-    // notification が response より前に届くケース（実装上ありえない想定だが）の保険。
+    // notification が response より前に届くケースの保険。
     const placeholderId = `__pending__${this.#nextId}`;
     const askPromise = new Promise<AskResult>((resolve, reject) => {
       const turn: ActiveTurn = {
@@ -184,6 +231,7 @@ export class CodexClient {
         abortSignal: opts.abortSignal,
         onStarted: opts.onStarted,
         onDelta: opts.onDelta,
+        settled: false,
       };
       this.#activeTurns.set(opts.threadId, turn);
 
@@ -199,14 +247,32 @@ export class CodexClient {
         opts.abortSignal.addEventListener("abort", listener);
       }
     });
+    // ask() が turn/start await で throw して返る場合、askPromise が
+    // 呼び出し側に到達せず orphan 化する。後段で handleExit などが
+    // turn.rejectAsk を呼ぶと unhandledRejection になるため、ここで
+    // 念のため handler を 1 つ attach しておく（throw 経路は別チェーンで
+    // 呼び出し側に伝わるため、この swallow は実害がない）。
+    askPromise.catch(() => undefined);
 
-    // turn/start request → response.turn.id で turnId を確定
-    let turnId: string;
+    // turn/start request → response.turn.id で turnId を確定。
+    // onResolve コールバックで同期的に turn.turnId を更新する。これにより、
+    // 同一 chunk に turn/start response＋item/.../delta＋turn/completed が
+    // 含まれていても、各 notification が確定 turnId を見られる。
     try {
-      const response = (await this.#request("turn/start", params)) as {
-        turn: { id: string };
-      };
-      turnId = response.turn.id;
+      await this.#request("turn/start", params, (result) => {
+        const r = result as { turn: { id: string } };
+        const turnId = r.turn.id;
+        const turn = this.#activeTurns.get(opts.threadId);
+        if (turn !== undefined && turn.turnId === placeholderId) {
+          turn.turnId = turnId;
+          turn.onStarted?.(turnId);
+          if (turn.abortSignal?.aborted === true) {
+            this.interrupt(opts.threadId, turnId).catch(() => {
+              // 失敗は turn/completed の流れで救う
+            });
+          }
+        }
+      });
     } catch (err) {
       const turn = this.#activeTurns.get(opts.threadId);
       if (turn !== undefined) {
@@ -218,18 +284,6 @@ export class CodexClient {
       throw err;
     }
 
-    const turn = this.#activeTurns.get(opts.threadId);
-    if (turn !== undefined && turn.turnId === placeholderId) {
-      turn.turnId = turnId;
-      turn.onStarted?.(turnId);
-      // turn/start レスポンス受信前に abort されていた場合のキャッチアップ
-      if (turn.abortSignal?.aborted === true) {
-        this.interrupt(opts.threadId, turnId).catch(() => {
-          // 失敗は turn/completed の流れで救う
-        });
-      }
-    }
-
     return askPromise;
   }
 
@@ -238,8 +292,15 @@ export class CodexClient {
     await this.#request("turn/interrupt", { threadId, turnId });
   }
 
-  /** 内部：JSON-RPC リクエストを送信し、応答を待つ。 */
-  async #request(method: string, params: JsonValue): Promise<JsonValue> {
+  /**
+   * 内部：JSON-RPC リクエストを送信し、応答を待つ。
+   * @param onResolve 応答受信時に Promise resolve より前に同期実行される副作用フック。
+   */
+  async #request(
+    method: string,
+    params: JsonValue,
+    onResolve?: (value: JsonValue) => void
+  ): Promise<JsonValue> {
     const id = this.#nextId++;
     const req: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
     const timeoutMs = this.#options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -248,9 +309,13 @@ export class CodexClient {
         this.#pending.delete(id);
         reject(new Error(`JSON-RPC request '${method}' timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
+      const pending: PendingRequest = { resolve, reject, timer };
+      if (onResolve !== undefined) {
+        pending.onResolve = onResolve;
+      }
+      this.#pending.set(id, pending);
       try {
-        this.#process.write(encode(req));
+        this.#transport.write(encode(req));
       } catch (err) {
         clearTimeout(timer);
         this.#pending.delete(id);
@@ -262,7 +327,7 @@ export class CodexClient {
   /** 内部：JSON-RPC 通知を送信する（応答を待たない）。 */
   #notify(method: string, params: JsonValue): void {
     const note: JsonRpcNotification = { jsonrpc: "2.0", method, params };
-    this.#process.write(encode(note));
+    this.#transport.write(encode(note));
   }
 
   /** stdout の chunk を行単位に切り、各行を JSON-RPC メッセージとして処理する。 */
@@ -295,6 +360,9 @@ export class CodexClient {
     if ("error" in msg) {
       pending.reject(new Error(`JSON-RPC error ${msg.error.code}: ${msg.error.message}`));
     } else {
+      // 同期コールバックを先に実行して、後続の同チャンク内 notification が
+      // 更新後の activeTurn 状態を見られるようにする
+      pending.onResolve?.(msg.result);
       pending.resolve(msg.result);
     }
   }
@@ -319,12 +387,17 @@ export class CodexClient {
       }
       case "item/agentMessage/delta": {
         const threadId = params["threadId"] as string;
+        const turnId = params["turnId"] as string | undefined;
         const delta = (params["delta"] ?? "") as string;
         const turn = this.#activeTurns.get(threadId);
-        if (turn !== undefined) {
-          turn.buffer.push(delta);
-          turn.onDelta?.(delta);
+        if (turn === undefined || turn.settled) break;
+        // turnId が確定済みかつ通知の turnId と一致しないチャンクは破棄（古い／別ターンの混入を防止）
+        if (typeof turnId === "string" && !turn.turnId.startsWith("__pending__") && turn.turnId !== turnId) {
+          this.#options.onLog?.(`[stale delta] thread=${threadId} expected=${turn.turnId} got=${turnId}`);
+          break;
         }
+        turn.buffer.push(delta);
+        turn.onDelta?.(delta);
         break;
       }
       case "turn/completed": {
@@ -332,18 +405,28 @@ export class CodexClient {
         const turnObj = params["turn"] as
           | { id?: string; status?: string; error?: { message?: string } | null }
           | undefined;
+        const completedTurnId = turnObj?.id;
         const turn = this.#activeTurns.get(threadId);
-        if (turn === undefined) {
+        if (turn === undefined || turn.settled) break;
+        // turnId 不一致は別ターンの完了通知。無視する（古い／別ターンの誤解決を防止）
+        if (
+          typeof completedTurnId === "string" &&
+          !turn.turnId.startsWith("__pending__") &&
+          turn.turnId !== completedTurnId
+        ) {
+          this.#options.onLog?.(`[stale completion] thread=${threadId} expected=${turn.turnId} got=${completedTurnId}`);
           break;
         }
-        this.#activeTurns.delete(threadId);
-        if (turn.abortListener && turn.abortSignal) {
-          turn.abortSignal.removeEventListener("abort", turn.abortListener);
-        }
         const status = turnObj?.status;
+        if (status === "inProgress") {
+          // 終端ステータスではない。完了とみなさず保留（実装上ありえないが防御的に）
+          this.#options.onLog?.(`[unexpected status] turn/completed with status=inProgress, ignoring`);
+          break;
+        }
         if (status === "failed") {
           const message = turnObj?.error?.message ?? "turn failed";
-          turn.rejectAsk(new Error(`turn failed: ${message}`));
+          this.#settleTurn(turn, () => turn.rejectAsk(new Error(`turn failed: ${message}`)));
+          this.#activeTurns.delete(threadId);
           break;
         }
         const text = turn.buffer.join("");
@@ -351,7 +434,8 @@ export class CodexClient {
         if (status === "interrupted" || turn.abortSignal?.aborted === true) {
           result.aborted = true;
         }
-        turn.resolveAsk(result);
+        this.#settleTurn(turn, () => turn.resolveAsk(result));
+        this.#activeTurns.delete(threadId);
         break;
       }
       default:
@@ -360,8 +444,22 @@ export class CodexClient {
     }
   }
 
+  /** ActiveTurn を 1 度だけ resolve/reject し、abort listener を解除するヘルパ。 */
+  #settleTurn(turn: ActiveTurn, settler: () => void): void {
+    if (turn.settled) return;
+    turn.settled = true;
+    if (turn.abortListener && turn.abortSignal) {
+      turn.abortSignal.removeEventListener("abort", turn.abortListener);
+    }
+    settler();
+  }
+
   #handleExit(code: number | null, _signal: NodeJS.Signals | null): void {
     this.#ready = false;
+    this.#startPromise = null;
+    // 部分的な JSON が次のプロセス起動時の最初のチャンクと結合して
+    // パースエラーになるのを防ぐため、buffer をクリアする
+    this.#buffer.reset();
     const err = new Error(`codex app-server exited unexpectedly (code=${code ?? "null"})`);
     for (const [, p] of this.#pending) {
       clearTimeout(p.timer);
@@ -369,10 +467,7 @@ export class CodexClient {
     }
     this.#pending.clear();
     for (const [, t] of this.#activeTurns) {
-      t.rejectAsk(err);
-      if (t.abortListener && t.abortSignal) {
-        t.abortSignal.removeEventListener("abort", t.abortListener);
-      }
+      this.#settleTurn(t, () => t.rejectAsk(err));
     }
     this.#activeTurns.clear();
   }

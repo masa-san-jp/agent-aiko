@@ -35,7 +35,8 @@ export interface AskOptions {
   /** ユーザー発話の本文。CodexClient 内部で UserInput[] に変換する。 */
   text: string;
   /**
-   * turn/started 通知受信時に呼ばれる。
+   * turnId が確定した時点で呼ばれる。発火源は通常 turn/start レスポンス
+   * （TurnStartResponse.turn.id）で、turn/started 通知はバックアップ経路。
    * SIGINT ハンドラから turn/interrupt を発行するため、ここで turnId を上位に伝える。
    */
   onStarted?: (turnId: string) => void;
@@ -49,7 +50,7 @@ export interface AskOptions {
 export interface AskResult {
   /** ターン全体で集約した応答テキスト。 */
   text: string;
-  /** turn/started で確定したターン ID。 */
+  /** turn/start レスポンス（TurnStartResponse.turn.id）で確定したターン ID。 */
   turnId: string;
   /** AbortSignal もしくは外部 interrupt() で中断された場合 true。 */
   aborted?: boolean;

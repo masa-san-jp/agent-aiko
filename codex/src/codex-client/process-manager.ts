@@ -1,8 +1,11 @@
 // codex app-server child process lifecycle.
 //
+// Transport インターフェース（transport.ts）の実機実装。
 // 設計の正本: dev-docs/2026-05-05-Agent-Aiko-Codex-design.md v0.3.1 §6.5
 
 import { type ChildProcess, spawn } from "node:child_process";
+
+import type { Transport } from "./transport.js";
 
 export interface ProcessManagerOptions {
   /** codex バイナリのパス。既定は 'codex'（PATH 解決）。 */
@@ -11,18 +14,20 @@ export interface ProcessManagerOptions {
   codexHome?: string;
   /** stderr の各行を購読するコールバック。 */
   onLog?: (line: string) => void;
-  /** プロセスが予期せず終了したときに呼ばれる。 */
-  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
 
 /**
  * codex app-server を子プロセスとして起動・管理する。
- * stdio は pipe で、stdin/stdout は呼び出し側に提供する（JSON-RPC framing は別レイヤ）。
+ * stdio は pipe で、JSON-RPC framing は呼び出し側（CodexClient）が担う。
  */
-export class ProcessManager {
+export class ProcessManager implements Transport {
   #proc: ChildProcess | null = null;
   readonly #options: ProcessManagerOptions;
   #stderrBuf = "";
+  readonly #exitListeners: Array<
+    (code: number | null, signal: NodeJS.Signals | null) => void
+  > = [];
+  readonly #stdoutListeners: Array<(chunk: Buffer) => void> = [];
 
   constructor(options: ProcessManagerOptions = {}) {
     this.#options = options;
@@ -44,6 +49,11 @@ export class ProcessManager {
     });
     this.#proc = child;
 
+    // 既に登録済みの stdout リスナーを子プロセスへ接続
+    for (const handler of this.#stdoutListeners) {
+      child.stdout?.on("data", handler);
+    }
+
     child.stderr?.on("data", (chunk: Buffer) => {
       this.#stderrBuf += chunk.toString("utf8");
       let idx = this.#stderrBuf.indexOf("\n");
@@ -57,7 +67,9 @@ export class ProcessManager {
 
     child.on("exit", (code, signal) => {
       this.#proc = null;
-      this.#options.onExit?.(code, signal);
+      for (const listener of this.#exitListeners) {
+        listener(code, signal);
+      }
     });
 
     child.on("error", (err) => {
@@ -78,10 +90,18 @@ export class ProcessManager {
 
   /** stdout のチャンクを購読する。 */
   onStdout(handler: (chunk: Buffer) => void): void {
-    if (this.#proc === null) {
-      throw new Error("ProcessManager not started");
+    this.#stdoutListeners.push(handler);
+    // 既に start() 済みなら子プロセスにも繋ぐ
+    if (this.#proc !== null) {
+      this.#proc.stdout?.on("data", handler);
     }
-    this.#proc.stdout?.on("data", handler);
+  }
+
+  /** プロセスが予期せず終了したときに呼ばれるリスナーを登録する。 */
+  onExit(
+    handler: (code: number | null, signal: NodeJS.Signals | null) => void
+  ): void {
+    this.#exitListeners.push(handler);
   }
 
   /** プロセスを停止する。SIGTERM 後 5 秒以内に終了しなければ SIGKILL。 */
@@ -105,10 +125,5 @@ export class ProcessManager {
         // 既に終了している場合は exit イベント側で resolve される
       }
     });
-  }
-
-  /** プロセスが起動中か。 */
-  isRunning(): boolean {
-    return this.#proc !== null && !this.#proc.killed;
   }
 }
