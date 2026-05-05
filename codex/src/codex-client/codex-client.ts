@@ -200,10 +200,14 @@ export class CodexClient {
     if (opts.ephemeral !== undefined) {
       params["ephemeral"] = opts.ephemeral;
     }
-    const result = (await this.#request("thread/start", params)) as Record<string, JsonValue>;
-    const threadId = result["threadId"];
+    // 実機スキーマ（v2/ThreadStartResponse）: { thread: Thread, model, modelProvider, ... }
+    // threadId は response.thread.id にある（トップレベルの threadId フィールドは存在しない）
+    const result = (await this.#request("thread/start", params)) as {
+      thread?: { id?: string };
+    };
+    const threadId = result.thread?.id;
     if (typeof threadId !== "string") {
-      throw new Error(`thread/start returned no threadId: ${JSON.stringify(result)}`);
+      throw new Error(`thread/start returned no thread.id: ${JSON.stringify(result)}`);
     }
     return { threadId };
   }

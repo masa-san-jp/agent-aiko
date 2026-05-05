@@ -202,7 +202,7 @@ describe("CodexClient.startThread", () => {
     t.pushIncoming({
       jsonrpc: "2.0",
       id: req.id,
-      result: { threadId: "th-new" },
+      result: { thread: { id: "th-new" } },
     });
     const result = await threadP;
     assert.equal(result.threadId, "th-new");
@@ -217,12 +217,12 @@ describe("CodexClient.startThread", () => {
     const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "thread/start");
     assert.ok(req);
     assert.deepEqual(req.params, { baseInstructions: "only base" });
-    t.pushIncoming({ jsonrpc: "2.0", id: req.id, result: { threadId: "th-min" } });
+    t.pushIncoming({ jsonrpc: "2.0", id: req.id, result: { thread: { id: "th-min" } } });
     await threadP;
     await client.stop();
   });
 
-  it("rejects when response lacks threadId", async () => {
+  it("rejects when response lacks thread.id", async () => {
     const t = new MockTransport();
     const client = await startClient(t);
     const threadP = client.startThread({ baseInstructions: "x" });
@@ -230,7 +230,7 @@ describe("CodexClient.startThread", () => {
     const req = t.writes.map((w) => JSON.parse(w)).find((m) => m.method === "thread/start");
     assert.ok(req);
     t.pushIncoming({ jsonrpc: "2.0", id: req.id, result: { unexpected: "shape" } });
-    await assert.rejects(threadP, /thread\/start returned no threadId/);
+    await assert.rejects(threadP, /thread\/start returned no thread\.id/);
     await client.stop();
   });
 });
