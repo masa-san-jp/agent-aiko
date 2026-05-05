@@ -203,6 +203,104 @@ export class AikoRuntime {
     return result;
   }
 
+  /**
+   * mode 変更や persona 編集後に呼ぶ。
+   * 旧 threadId を破棄し、~/.aiko/ を再ロード→ baseInstructions を再合成→ 新規 thread/start。
+   * spec §6.7：baseInstructions はスレッド存続中に変更不可なので、人格イベント時は新規スレッドを開く必要がある。
+   */
+  async restartThread(): Promise<void> {
+    if (!this.#ownsClient && this.#threadId === null) {
+      throw new Error("AikoRuntime not started");
+    }
+    // 旧 threadId は破棄するだけで明示的な archive は呼ばない（必要なら Phase 5 で判断）
+    this.#threadId = null;
+    this.#snapshot = null;
+
+    const aikoHomeOpt: { aikoHome?: string } = {};
+    if (this.#options.aikoHome !== undefined) aikoHomeOpt.aikoHome = this.#options.aikoHome;
+    this.#snapshot = await loadPersona(aikoHomeOpt);
+    const baseInstructions = buildBaseInstructions(this.#snapshot);
+    const { threadId } = await this.#client.startThread({
+      baseInstructions,
+      ephemeral: false,
+    });
+    this.#threadId = threadId;
+    this.#options.onLog?.(
+      `[aiko-runtime] thread restarted: ${threadId} (mode=${this.#snapshot.mode})`
+    );
+  }
+
+  /**
+   * INVARIANTS チェック専用 ephemeral スレッドで指示文を判定する（spec §6.4）。
+   * 人格スレッドとは完全に独立。判定結果（{ violates, reason, clauses }）を返す。
+   * JSON.parse 失敗時は安全側に倒し violates: true / reason: "判定不能" で返す。
+   *
+   * @param invariants INVARIANTS.md の内容（呼び出し側が AikoPersonaSnapshot.invariants を渡す想定）
+   * @param instruction ユーザーが /aiko-override に指定したカスタマイズ指示文
+   */
+  async runInvariantsCheck(
+    invariants: string,
+    instruction: string
+  ): Promise<{ violates: boolean; reason: string; clauses: string[] }> {
+    const checkerInstructions = [
+      "あなたは Aiko 人格システムの「INVARIANTS 違反チェッカー」です。",
+      "人格は持たず、感情も入れず、以下のルールに従って機械的に判定してください。",
+      "",
+      "# 不変条項（INVARIANTS）",
+      invariants.trim(),
+      "",
+      "# 入力",
+      "ユーザーが Aiko の人格カスタマイズとして指示した内容（ユーザー発話で与えます）",
+      "",
+      "# 出力",
+      "必ず以下の JSON のみを返してください。前後に説明文を付けないでください。",
+      "",
+      "{",
+      '  "violates": <boolean>,',
+      '  "reason": "<違反する場合の該当条項と理由を 1 文で。違反しない場合は空文字>",',
+      '  "clauses": ["<該当する INVARIANTS の条項見出し>"]',
+      "}",
+    ].join("\n");
+
+    const { threadId } = await this.#client.startThread({
+      baseInstructions: checkerInstructions,
+      ephemeral: true,
+    });
+    let result;
+    try {
+      result = await this.#client.ask({ threadId, text: instruction });
+    } catch (err) {
+      // 通信失敗等は安全側
+      return {
+        violates: true,
+        reason: `判定不能（${(err as Error).message}）`,
+        clauses: [],
+      };
+    }
+    const text = result.text.trim();
+    // JSON 抽出：応答全体が JSON のことが多いが、念のため { ... } 部分を探す
+    const jsonStart = text.indexOf("{");
+    const jsonEnd = text.lastIndexOf("}");
+    if (jsonStart < 0 || jsonEnd <= jsonStart) {
+      return { violates: true, reason: "判定不能（JSON が見つからない）", clauses: [] };
+    }
+    try {
+      const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as {
+        violates?: unknown;
+        reason?: unknown;
+        clauses?: unknown;
+      };
+      const violates = parsed.violates === true;
+      const reason = typeof parsed.reason === "string" ? parsed.reason : "";
+      const clauses = Array.isArray(parsed.clauses)
+        ? parsed.clauses.filter((c): c is string => typeof c === "string")
+        : [];
+      return { violates, reason, clauses };
+    } catch (err) {
+      return { violates: true, reason: `判定不能（${(err as Error).message}）`, clauses: [] };
+    }
+  }
+
   /** クリーンアップ。所有している CodexClient のみ stop する。 */
   async stop(): Promise<void> {
     this.#threadId = null;
