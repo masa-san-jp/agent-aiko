@@ -52,7 +52,6 @@ aiko    # ~/.local/bin/aiko を PATH に通してから
 人格コマンドはどちらの版でも同じです：
 
 ```
-/aiko                            現在のモードでアイコを起動（モードは変えない）
 /aiko-mode                       現在のモードを表示
 /aiko-mode [origin|override]     モードを切替
 /aiko-or                         アイコ（カスタマイズ）に切替（/aiko-override でも可）
@@ -62,6 +61,8 @@ aiko    # ~/.local/bin/aiko を PATH に通してから
 /aiko-export                     現在のアイコ（カスタマイズ）を再現可能な形式で出力
 /aiko-diff                       オリジナルと自分用の差分を表示
 ```
+
+> **注記**：`/aiko`（読み込み専用の起動）は Claude Code 版固有のコマンドです。Codex 版では `aiko` シェル起動時に自動で人格が読み込まれるため不要です。
 
 人格を直接編集しないでください。両版とも `aiko-origin.md` と `INVARIANTS.md` は **OS パーミッション（chmod 444）** で書込から保護されています。これに加えて：
 
