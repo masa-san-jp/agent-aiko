@@ -17,7 +17,7 @@
 #   4. ~/.aiko/ を初期化（既存ならユーザーデータ温存、不変ファイルのみ更新）
 #   5. ~/.local/bin/aiko に shim を設置
 #
-# 設計の正本: dev-docs/2026-05-05-Agent-Aiko-Codex-design.md v0.3.1 §6.5 / §7.1
+# 設計の正本: 2026-05-05-Agent-Aiko-Codex-design.md（masa-san-jp/Agent-Aiko-dev リポ） v0.3.1 §6.5 / §7.1
 
 set -euo pipefail
 
@@ -158,25 +158,34 @@ if [ ! -d "$TEMPLATE_AIKO_DIR" ]; then
   exit 1
 fi
 
-# 既存と非既存で挙動を分ける（spec §5.2）
-#   不在  : テンプレート全体をコピー
-#   既存  : 不変ファイル（aiko-origin.md / INVARIANTS.md）のみ上書き、ユーザーデータは温存
+# 不在 / 既存にかかわらず一貫したルールで初期化する（spec §5.2）：
+#   不変ファイル（aiko-origin.md / INVARIANTS.md / capability/skills/）は常に上書き
+#   ユーザーデータ（mode / user.md / aiko-override.md / capability/rules/rules-base.md）は
+#     既存があれば温存、無ければテンプレからコピー（mode は不在なら "origin" で初期化、
+#     override は不在なら origin と同内容で初期化）
 mkdir -p "$AIKO_HOME"
 
-copy_if_present() {
+# 必須テンプレファイルの存在確認（不在ならここで明示的に fail）
+for required in "persona/aiko-origin.md" "persona/INVARIANTS.md"; do
+  if [ ! -f "$TEMPLATE_AIKO_DIR/$required" ]; then
+    fail "必須テンプレートファイルが見つかりません: $TEMPLATE_AIKO_DIR/$required"
+    fail "  リポジトリの claude-code/template/.claude/aiko/ が壊れている可能性があります。"
+    exit 1
+  fi
+done
+
+copy_overwrite() {
   local src="$1"
   local dst="$2"
-  if [ -e "$src" ]; then
-    mkdir -p "$(dirname "$dst")"
-    # 書込権限が無い既存ファイル（chmod 444）に上書きするため一度 chmod する
-    [ -f "$dst" ] && chmod 644 "$dst" 2>/dev/null || true
-    cp -R "$src" "$dst"
-  fi
+  mkdir -p "$(dirname "$dst")"
+  # 書込権限が無い既存ファイル（chmod 444）に上書きするため一度 chmod する
+  [ -f "$dst" ] && chmod 644 "$dst" 2>/dev/null || true
+  cp -R "$src" "$dst"
 }
 
 # 不変ファイルは常に上書き
-copy_if_present "$TEMPLATE_AIKO_DIR/persona/aiko-origin.md" "$AIKO_HOME/persona/aiko-origin.md"
-copy_if_present "$TEMPLATE_AIKO_DIR/persona/INVARIANTS.md"  "$AIKO_HOME/persona/INVARIANTS.md"
+copy_overwrite "$TEMPLATE_AIKO_DIR/persona/aiko-origin.md" "$AIKO_HOME/persona/aiko-origin.md"
+copy_overwrite "$TEMPLATE_AIKO_DIR/persona/INVARIANTS.md"  "$AIKO_HOME/persona/INVARIANTS.md"
 
 # capability/skills/ も template が真ソースなので上書き（個別ユーザースキルは
 # spec §5.4 で別パス想定なので一旦シンプルに replace）

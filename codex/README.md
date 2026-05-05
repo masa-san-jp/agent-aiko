@@ -2,7 +2,7 @@
 
 Codex 版 Agent-Aiko の TypeScript パッケージ。`codex app-server`（OpenAI 公式の Codex CLI）経由で ChatGPT サブスクリプション上に Aiko 人格を載せ、対話シェル（`aiko` コマンド）を提供します。
 
-> **ステータス**: Phase 6 完了 — **MVP 達成**。`bash codex/scripts/install.sh` で Node.js / codex CLI 確認 → ビルド → `~/.aiko/` 初期化 → `aiko` shim 設置までを 1 コマンドで実行できる状態。設計は `dev-docs/2026-05-05-Agent-Aiko-Codex-design.md` v0.3.1 を参照してください。
+> **ステータス**: Phase 6 完了 — **MVP 達成**。`bash codex/scripts/install.sh` で Node.js / codex CLI 確認 → ビルド → `~/.aiko/` 初期化 → `aiko` shim 設置までを 1 コマンドで実行できる状態。設計は [`Agent-Aiko-dev/2026-05-05-Agent-Aiko-Codex-design.md`](https://github.com/masa-san-jp/Agent-Aiko-dev/blob/main/2026-05-05-Agent-Aiko-Codex-design.md) v0.3.1 を参照してください。
 
 ## クイックスタート
 
@@ -96,7 +96,7 @@ npm run schema:generate
 
 ## 設計の単一情報源（SoT）
 
-実装方針・API 形・人格注入経路・キャンセル経路などは **すべて** `dev-docs/2026-05-05-Agent-Aiko-Codex-design.md`（v0.3.1）を正本とします。コードと仕様書がずれた場合は仕様書を優先するか、PR でずれた理由を明記して仕様書を更新してください。
+実装方針・API 形・人格注入経路・キャンセル経路などは **すべて** [`Agent-Aiko-dev/2026-05-05-Agent-Aiko-Codex-design.md`](https://github.com/masa-san-jp/Agent-Aiko-dev/blob/main/2026-05-05-Agent-Aiko-Codex-design.md)（v0.3.1）を正本とします。コードと仕様書がずれた場合は仕様書を優先するか、PR でずれた理由を明記して仕様書を更新してください。
 
 主要な確定事項（v0.3.0 で実機検証済）：
 

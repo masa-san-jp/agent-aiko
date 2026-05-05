@@ -5,7 +5,7 @@
 import { strict as assert } from "node:assert";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -22,20 +22,43 @@ interface Sandbox {
   root: string;
   aikoHome: string;
   binDir: string;
+  /** stub-codex を含む dir。execFile の env.PATH 先頭に置いて実機 codex に依存させない。 */
+  stubBin: string;
   cleanup: () => Promise<void>;
 }
 
+/** 実機 codex に依存させないためのダミー codex スクリプト。
+ *  --version と "login status" を最低限満たす。 */
+const STUB_CODEX_SCRIPT = `#!/usr/bin/env bash
+case "$1" in
+  --version) echo "codex-cli 0.0.0-test"; exit 0 ;;
+  login)
+    if [ "$2" = "status" ]; then echo "Logged in (stub)"; exit 0; fi
+    ;;
+esac
+echo "stub codex: ignoring args: $*"
+exit 0
+`;
+
 async function makeSandbox(): Promise<Sandbox> {
   const root = await mkdtemp(join(tmpdir(), "aiko-installer-test-"));
+  const stubBin = join(root, "stub-bin");
+  await execFileAsync("mkdir", ["-p", stubBin]);
+  const stubCodex = join(stubBin, "codex");
+  await writeFile(stubCodex, STUB_CODEX_SCRIPT, { mode: 0o755 });
   return {
     root,
     aikoHome: join(root, ".aiko"),
     binDir: join(root, "bin"),
+    stubBin,
     cleanup: async () => rm(root, { recursive: true, force: true }),
   };
 }
 
-async function runInstaller(sb: Sandbox, ...extraArgs: string[]): Promise<{ stdout: string; stderr: string }> {
+async function runInstaller(
+  sb: Sandbox,
+  ...extraArgs: string[]
+): Promise<{ stdout: string; stderr: string }> {
   const args = [
     INSTALLER,
     "--skip-build",
@@ -46,7 +69,9 @@ async function runInstaller(sb: Sandbox, ...extraArgs: string[]): Promise<{ stdo
     sb.binDir,
     ...extraArgs,
   ];
-  return execFileAsync("bash", args);
+  // PATH 先頭に stub-bin を置き、実機 codex に依存させない
+  const env = { ...process.env, PATH: `${sb.stubBin}:${process.env["PATH"] ?? ""}` };
+  return execFileAsync("bash", args, { env });
 }
 
 describe("codex/scripts/install.sh", () => {
@@ -96,9 +121,13 @@ describe("codex/scripts/install.sh", () => {
     assert.match(shim, /^#!\/usr\/bin\/env bash/);
     assert.match(shim, /exec node /);
     assert.match(shim, /aiko-shell\.js/);
-    // 実行ビット（macOS / Linux 共通）
-    const { stdout: lsOut } = await execFileAsync("ls", ["-l", shimPath]);
-    assert.match(lsOut, /^[-l]rwx/, `shim is not executable: ${lsOut.trim()}`);
+    // 実行ビット判定は ls 出力パースに依存しない fs.stat ベース
+    const st = await stat(shimPath);
+    assert.equal(
+      (st.mode & 0o111) !== 0,
+      true,
+      `shim is not executable: mode=0o${(st.mode & 0o777).toString(8)}`
+    );
   });
 
   it("preserves user data on second install (mode / user.md / aiko-override.md / rules-base.md)", async () => {
@@ -133,12 +162,35 @@ describe("codex/scripts/install.sh", () => {
     await runInstaller(sandbox);
     // 一時的に書込権限を上げてから上書き（インストーラは 444 を解除して上書きする想定）
     const originPath = join(sandbox.aikoHome, "persona/aiko-origin.md");
-    await execFileAsync("chmod", ["644", originPath]);
+    await chmod(originPath, 0o644);
     await writeFile(originPath, "tampered content");
 
     await runInstaller(sandbox);
 
     const restored = await readFile(originPath, "utf8");
     assert.notEqual(restored, "tampered content", "aiko-origin.md should be restored from template");
+  });
+
+  it("works with stub codex (PATH override) — no real codex CLI required", async () => {
+    // stub-bin にダミー codex を置いた状態で installer が PATH 経由で動くことを確認。
+    // skip-auth-check を外して codex login status の grep ロジックも動かす。
+    const env = {
+      ...process.env,
+      PATH: `${sandbox.stubBin}:${process.env["PATH"] ?? ""}`,
+    };
+    await execFileAsync(
+      "bash",
+      [
+        INSTALLER,
+        "--skip-build",
+        "--aiko-home",
+        sandbox.aikoHome,
+        "--bin-dir",
+        sandbox.binDir,
+      ],
+      { env }
+    );
+    assert.equal(existsSync(join(sandbox.aikoHome, "mode")), true);
+    assert.equal(existsSync(join(sandbox.binDir, "aiko")), true);
   });
 });
