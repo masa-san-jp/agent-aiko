@@ -111,7 +111,7 @@ Agent-Aiko/
 │                   ├── session-start.sh
 │                   ├── session-end.sh
 │                   └── pre-tool-use.sh
-└── (codex/                             # Codex 版（実装は Phase 1 以降で追加予定）
+# 注: Codex 版（codex/）は Phase 1 以降で本リポジトリに追加予定。
 ```
 
 **`scripts/install.sh` は互換ラッパー**です。旧 URL `https://raw.githubusercontent.com/masa-san-jp/Agent-Aiko/main/scripts/install.sh` をそのまま生かし、内部で `claude-code/scripts/install.sh` に dispatch します。直接実体を呼ぶ場合は `bash claude-code/scripts/install.sh` でも動きます。

@@ -23,6 +23,16 @@ if [ -f "$0" ]; then
   # ローカル実行：同リポの claude-code/scripts/install.sh を呼ぶ
   exec "$(dirname "$0")/../claude-code/scripts/install.sh" "$@"
 else
-  # curl | bash 実行：raw URL から実体を fetch して bash プロセス置換で実行
-  exec bash <(curl -fsSL "${RAW_BASE}/claude-code/scripts/install.sh") "$@"
+  # curl | bash 実行：raw URL から実体を一時ファイルにダウンロードしてから実行する。
+  # bash <(curl ...) のプロセス置換は curl 失敗時に終了ステータスが伝播せず、
+  # bash が空入力で正常終了してしまうため使わない。
+  TMP_SCRIPT="$(mktemp -t agent-aiko-install.XXXXXX)"
+  trap 'rm -f "$TMP_SCRIPT"' EXIT
+  if ! curl -fsSL "${RAW_BASE}/claude-code/scripts/install.sh" -o "$TMP_SCRIPT"; then
+    echo "ERROR: failed to fetch installer from ${RAW_BASE}/claude-code/scripts/install.sh" >&2
+    exit 1
+  fi
+  # exec すると trap が発火せず一時ファイルが残るため、通常実行 + 終了ステータス伝播にする
+  bash "$TMP_SCRIPT" "$@"
+  exit $?
 fi
