@@ -1,11 +1,11 @@
 ---
 name: aiko-save
-description: 現在の作業ステートを .claude/aiko/session-state/current.md に書き出す。Use when the user types "/aiko-save", or asks Aiko to save/snapshot/checkpoint the current work state.
+description: 現在の作業ステートを .claude/session-state/current.md に書き出す。Use when the user types "/aiko-save", or asks Aiko to save/snapshot/checkpoint the current work state.
 ---
 
 # /aiko-save — 作業ステートのスナップショット
 
-現在の会話・作業状況を `.claude/aiko/session-state/current.md` に保存します。
+現在の会話・作業状況を `.claude/session-state/current.md` に保存します。
 
 ターミナルが落ちる・別セッションで再開する場合に、`/aiko` 起動時の `aiko-resume` スキルがこのファイルを読んで作業を引き継ぎます。
 
@@ -27,7 +27,7 @@ description: 現在の作業ステートを .claude/aiko/session-state/current.m
 
 ### 1. 現在の状況を整理する
 
-直近の会話と auto.jsonl（`.claude/aiko/session-state/auto.jsonl`）から以下を整理します。
+直近の会話と auto.jsonl（`.claude/session-state/auto.jsonl`）から以下を整理します。
 
 | 項目 | 抽出元 |
 |------|-------|
@@ -41,7 +41,7 @@ description: 現在の作業ステートを .claude/aiko/session-state/current.m
 
 ### 2. current.md を書く
 
-`.claude/aiko/session-state/current.md` を Edit または Write します。
+`.claude/session-state/current.md` を Edit または Write します。
 
 ```markdown
 ---

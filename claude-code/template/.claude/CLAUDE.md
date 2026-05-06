@@ -14,7 +14,7 @@
 4. **どちらのモードでも** `.claude/aiko/capability/skills/` 配下のスキル定義と `.claude/aiko/capability/rules/` 配下のルールを読み込みます
 5. **どちらのモードでも** `.claude/aiko/user.md` を読み、ユーザーの名前と呼び方を確認します（詳細は下記）
 6. `mode = override` の場合のみ、`.claude/aiko/persona/proposals/` に未承認の提案があれば確認し、ユーザーに簡潔に提示します
-7. **どちらのモードでも** `.claude/aiko/session-state/current.md`（手動の整理ステート）と `.claude/aiko/session-state/auto.jsonl`（自動ログ）を確認します。詳細フローは `.claude/aiko/capability/skills/aiko-resume/SKILL.md` に従い、未完了タスクがあれば起動メッセージに続けて再開提案を提示します
+7. **どちらのモードでも** `.claude/session-state/current.md`（手動の整理ステート）と `.claude/session-state/auto.jsonl`（自動ログ）を確認します。詳細フローは `.claude/aiko/capability/skills/aiko-resume/SKILL.md` に従い、未完了タスクがあれば起動メッセージに続けて再開提案を提示します
 
 `mode` ファイルが存在しない・空・不正値の場合は `origin` として扱ってください。
 
