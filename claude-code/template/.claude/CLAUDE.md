@@ -104,6 +104,13 @@
 - `aiko-origin.md` と `aiko-override.md` の差分をユニファイド diff 形式で表示します
 - 差分がなければ「アイコ（オリジナル）と アイコ（カスタマイズ）は同一です」と報告します
 
+### `/aiko-save`
+
+- 現在の作業ステートを `.claude/session-state/current.md` にスナップショット保存します
+- ターミナル断・セッション切替で会話履歴を失っても、`/aiko` 起動時の `aiko-resume` が `current.md` を読んで再開を提案します
+- ユーザー起点でのみ発動します（`/aiko-save` 入力、「セーブして」等の自然言語要求、終了宣言）。アイコ自身が自動で `current.md` を書き換えることはありません
+- 詳細は `.claude/skills/aiko-save/SKILL.md` を参照
+
 
 ---
 
