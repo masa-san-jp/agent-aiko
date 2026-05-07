@@ -40,9 +40,11 @@ if tool not in ("Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"):
 tool_input = data.get("tool_input") or {}
 
 # よくある秘匿情報パターンの redact（誤検知より過剰検知を優先）
+# NOTE: より具体的なプレフィックス（sk-ant-）を、より一般的なパターン（sk-）より先に置く。
+# 順序を逆にすると Anthropic キー (sk-ant-...) が openai-key として誤ラベルされる。
 SECRET_PATTERNS = [
-    (re.compile(r"sk-[A-Za-z0-9_-]{16,}"), "[REDACTED:openai-key]"),
     (re.compile(r"sk-ant-[A-Za-z0-9_-]{16,}"), "[REDACTED:anthropic-key]"),
+    (re.compile(r"sk-[A-Za-z0-9_-]{16,}"), "[REDACTED:openai-key]"),
     (re.compile(r"ghp_[A-Za-z0-9]{20,}"), "[REDACTED:github-token]"),
     (re.compile(r"github_pat_[A-Za-z0-9_]{20,}"), "[REDACTED:github-token]"),
     (re.compile(r"gho_[A-Za-z0-9]{20,}"), "[REDACTED:github-oauth]"),
@@ -71,6 +73,21 @@ else:
 print(json.dumps(obj, ensure_ascii=False))
 ' <<<"$INPUT" 2>/dev/null)
 
+# auto.jsonl への追記と切り詰めは並列セッション/フックで競合し得るため、
+# mkdir-lock（POSIX で atomic）で append + tail+mv を同一クリティカル
+# セクションにする。flock は macOS 標準に無いため mkdir で代替。
+# ロック取得に失敗（5 秒タイムアウト）した場合は今回のログを諦めて hook は止めない。
+LOCK_DIR="$LOG_DIR/.lock"
+ATTEMPTS=0
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [ "$ATTEMPTS" -gt 50 ]; then
+    exit 0
+  fi
+  sleep 0.1
+done
+trap 'rmdir "$LOCK_DIR" 2>/dev/null; exit 0' EXIT INT TERM
+
 if [ -n "$LINE" ]; then
   printf '%s\n' "$LINE" >> "$LOG_FILE" 2>/dev/null || true
 fi
@@ -83,4 +100,5 @@ if [ -f "$LOG_FILE" ]; then
   fi
 fi
 
+rmdir "$LOCK_DIR" 2>/dev/null
 exit 0
