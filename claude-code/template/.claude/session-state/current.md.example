@@ -17,4 +17,4 @@ current_task: （ここに現在のタスクを 1 行で書きます）
 - （触ったファイル・読んだファイルのパス）
 
 ## メモ
-- 雛形のため `status: completed`。`/aiko-save` 発動時に `in_progress` で書き換わります
+- 雛形のため `status: completed`。`/aiko-save` 発動時、通常は `status: in_progress` で書き換わります。終了宣言（「終わり」「お疲れ」等）と同時の保存時は `status: completed` で書き換わります
