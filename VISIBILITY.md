@@ -54,6 +54,7 @@
 ### 同名ネスト clone の予防
 
 - `/Agent-Aiko/` — 本リポを誤って自身配下に clone した場合の予防
+- `/Agent-Aiko-dev/` — 兄弟リポを誤って本リポ配下に clone した場合の予防（正しい配置は `../Agent-Aiko-dev/`）
 - `/dev-docs/` — 旧 dev-docs ネスト構造の再混入予防（`../Agent-Aiko-dev/` へ分離済み）
 
 ---

@@ -70,12 +70,18 @@ else
   echo "$SESSION" | sed 's/^/    /'
 fi
 
-print_section "6. dev-docs/ が本リポ内に存在しないか（兄弟分離の維持）"
+print_section "6. dev-docs/ ・ Agent-Aiko-dev/ が本リポ内に存在しないか（兄弟分離の維持）"
 
 if [ -d "dev-docs" ]; then
   check_ng "dev-docs/ が本リポ内に存在します。../Agent-Aiko-dev/ に分離してください"
 else
   check_ok "dev-docs/ は本リポ内に存在しない（兄弟分離 OK）"
+fi
+
+if [ -d "Agent-Aiko-dev" ]; then
+  check_ng "Agent-Aiko-dev/ が本リポ内に存在します。../Agent-Aiko-dev/（兄弟）として配置し直してください"
+else
+  check_ok "Agent-Aiko-dev/ は本リポ内に存在しない（兄弟分離 OK）"
 fi
 
 if [ -d "../Agent-Aiko-dev" ]; then

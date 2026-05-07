@@ -90,10 +90,11 @@ YYYY-MM-DD-<slug>.md
 
 ### ドキュメント更新時のリネーム
 
-既存ファイルを大幅に更新した場合は、日付を更新する:
+既存ファイルを大幅に更新した場合は、日付を更新する。`git mv` は **`Agent-Aiko-dev` リポ内**で、リポ基準の相対パスで実行する:
 
 ```sh
-git mv ../Agent-Aiko-dev/2026-04-27-design.md ../Agent-Aiko-dev/2026-05-01-design.md
+cd ../Agent-Aiko-dev
+git mv 2026-04-27-design.md 2026-05-01-design.md
 ```
 
 ---

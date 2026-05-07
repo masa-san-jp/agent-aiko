@@ -9,11 +9,13 @@
 ### 1. claude-code/template/ スキャン（配布用の汚染チェック）
 
 ```bash
-grep -rE "dev-docs|Agent-Aiko-dev" claude-code/template/ --include="*.md" --include="*.sh" --include="*.json" -l
+grep -rnE "dev-docs|Agent-Aiko-dev" claude-code/template/ --include="*.md" --include="*.sh" --include="*.json" \
+  | grep -v "://"
 ```
 
-- `dev-docs` または `Agent-Aiko-dev` への参照が含まれていれば **NG**（push ブロック対象）
+- ローカルパス参照として `dev-docs` または `Agent-Aiko-dev` が含まれていれば **NG**（push ブロック対象）
 - 開発者固有のパス・ツールが含まれていれば **NG**
+- URL 内の参照（`https://...Agent-Aiko-dev...` のような公開アセット URL）は許容（`template-check.sh` も `://` を含む行を除外）
 
 ### 2. dev-log.jsonl の更新確認
 
