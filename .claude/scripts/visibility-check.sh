@@ -9,8 +9,14 @@
 
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "$REPO_ROOT"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)" || {
+  echo "⛔ [visibility-check] REPO_ROOT の算出に失敗しました（スクリプト配置を確認）" >&2
+  exit 1
+}
+cd "$REPO_ROOT" || {
+  echo "⛔ [visibility-check] cd $REPO_ROOT に失敗しました" >&2
+  exit 1
+}
 
 NG=0
 
