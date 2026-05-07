@@ -10,12 +10,13 @@
 
 ```bash
 grep -rnE "dev-docs|Agent-Aiko-dev" claude-code/template/ --include="*.md" --include="*.sh" --include="*.json" \
-  | grep -v "://"
+  | sed -E 's|https?://[^[:space:]"<>)]+||g' \
+  | grep -E "dev-docs|Agent-Aiko-dev"
 ```
 
 - ローカルパス参照として `dev-docs` または `Agent-Aiko-dev` が含まれていれば **NG**（push ブロック対象）
 - 開発者固有のパス・ツールが含まれていれば **NG**
-- URL 内の参照（`https://...Agent-Aiko-dev...` のような公開アセット URL）は許容（`template-check.sh` も `://` を含む行を除外）
+- 許容されるのは **`https?://` の公開アセット URL のみ**。URL を一旦除去した上で再度マッチさせるため、`file://` 等のローカル依存 URL や、URL とローカルパスが同じ行に混在するケースもローカル参照は確実に検出される（`template-check.sh` と同じロジック）
 
 ### 2. dev-log.jsonl の更新確認
 

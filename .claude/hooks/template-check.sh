@@ -8,10 +8,14 @@ TEMPLATE_DIR="claude-code/template"
 
 [ -d "$TEMPLATE_DIR" ] || exit 0
 
-# URL 内の Agent-Aiko-dev（公開アセット参照）は許容するため、`://` を含む行は除外する
+# 許容するのは公開アセットの https?://URL のみ。各行から https?:// URL を一旦除去し、
+# その上で dev-docs / Agent-Aiko-dev が残ればローカルパス参照とみなして NG。
+# これにより file:// 等のローカル依存 URL は許容しないし、URL とローカルパスが
+# 同じ行に混在しているケースもローカル側を取りこぼさない。
 VIOLATIONS=$(grep -rnE "dev-docs|Agent-Aiko-dev" "$TEMPLATE_DIR/" \
   --include="*.md" --include="*.sh" --include="*.json" 2>/dev/null \
-  | grep -v "://" \
+  | sed -E 's|https?://[^[:space:]"<>)]+||g' \
+  | grep -E "dev-docs|Agent-Aiko-dev" \
   | cut -d: -f1 | sort -u)
 
 [ -n "$VIOLATIONS" ] || exit 0

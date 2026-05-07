@@ -24,10 +24,15 @@ check_ng() { echo "  [NG] $1"; NG=1; }
 
 print_section "1. 配布物 template/ の汚染チェック"
 
-if bash .claude/hooks/template-check.sh > /dev/null 2>&1; then
+TEMPLATE_OUTPUT=$(bash .claude/hooks/template-check.sh 2>&1)
+TEMPLATE_RC=$?
+if [ "$TEMPLATE_RC" -eq 0 ]; then
   check_ok "claude-code/template/ に開発者専用リポ参照なし"
 else
-  check_ng "claude-code/template/ に違反あり（template-check.sh の出力を確認）"
+  check_ng "claude-code/template/ に違反あり（以下 template-check.sh の出力）"
+  if [ -n "$TEMPLATE_OUTPUT" ]; then
+    echo "$TEMPLATE_OUTPUT" | sed 's/^/    /'
+  fi
 fi
 
 print_section "2. .claude/rules/ が tracked に紛れていないか"
