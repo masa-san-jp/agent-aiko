@@ -1,10 +1,11 @@
 images/
-dev-docs/
 .claude/settings.local.json
 .claude/rules/
 
 # Prevent same-name nested clone from re-appearing
 /Agent-Aiko/
+# 旧 dev-docs/ ネスト構造の再混入防止（dev-docs は ../Agent-Aiko-dev/ へ分離済み）
+/dev-docs/
 
 # Aiko session-state: 実データはコミットしない（雛形 .example のみコミット）
 **/session-state/auto.jsonl
